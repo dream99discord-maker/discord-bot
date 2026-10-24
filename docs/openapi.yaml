@@ -1,0 +1,1117 @@
+openapi: 3.1.0
+info:
+  title: The Last Pact Guardian API
+  version: 1.0.0
+  description: >-
+    API versionata usata dalla interfaccia web React/Vite inclusa. Le API amministrative
+    richiedono una sessione OAuth2 Discord valida e autorizzazione aggiornata sul
+    server. Le modifiche richiedono il token CSRF restituito da /api/v1/auth/me.
+servers:
+  - url: http://localhost:3000
+    description: Sviluppo locale
+  - url: https://bot.example.invalid
+    description: Sostituire con l’origine HTTPS di produzione
+tags:
+  - name: Autenticazione
+  - name: Configurazione
+  - name: Ticket
+  - name: Segnalazioni
+  - name: Moderazione
+  - name: Annunci
+  - name: Sicurezza
+paths:
+  /health:
+    get:
+      summary: Stato essenziale del servizio
+      responses:
+        '200': { description: Stato API, OAuth e connessione Discord }
+  /docs/openapi.yaml:
+    get:
+      summary: Documento OpenAPI
+      responses:
+        '200': { description: Specifica YAML versionata }
+  /api/v1/auth/discord:
+    get:
+      tags: [Autenticazione]
+      summary: Avvia il login Discord
+      description: Crea state e PKCE lato backend e reindirizza a Discord. Risponde 503 se OAuth non è configurato.
+      responses:
+        '302': { description: Reindirizzamento OAuth2 }
+        '503': { $ref: '#/components/responses/OAuthNonConfigurato' }
+  /api/v1/auth/discord/install:
+    get:
+      tags: [Autenticazione]
+      summary: Avvia l’installazione del bot con OAuth2 code grant
+      description: Crea state e PKCE, richiede bot, applications.commands, identify e guilds, quindi reindirizza al callback registrato. Se guild_id è presente, Discord preseleziona e blocca la scelta del server.
+      parameters:
+        - in: query
+          name: guild_id
+          schema: { $ref: '#/components/schemas/Snowflake' }
+      responses:
+        '302': { description: Reindirizzamento al consenso/installazione Discord }
+        '503': { $ref: '#/components/responses/OAuthNonConfigurato' }
+  /api/v1/auth/discord/callback:
+    get:
+      tags: [Autenticazione]
+      summary: Callback OAuth2 registrata nell’app Discord
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema: { type: string }
+        - in: query
+          name: state
+          required: true
+          schema: { type: string }
+        - in: query
+          name: iss
+          required: true
+          schema: { type: string, const: 'https://discord.com' }
+        - in: query
+          name: guild_id
+          schema: { $ref: '#/components/schemas/Snowflake' }
+        - in: query
+          name: permissions
+          schema: { type: string }
+      responses:
+        '302': { description: Sessione creata e reindirizzamento alla interfaccia web }
+        '401': { $ref: '#/components/responses/NonAutorizzato' }
+  /api/v1/auth/me:
+    get:
+      tags: [Autenticazione]
+      summary: Utente e token CSRF corrente
+      security: [{ Sessione: [] }]
+      responses:
+        '200':
+          description: Identità Discord e token CSRF
+          content:
+            application/json:
+              example: { user: { id: '123456789012345678', username: 'utente', global_name: 'Utente' }, csrfToken: 'token-casuale' }
+        '401': { $ref: '#/components/responses/NonAutorizzato' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Autenticazione]
+      summary: Revoca la sessione applicativa
+      security: [{ Sessione: [], Csrf: [] }]
+      responses:
+        '204': { description: Sessione rimossa dal database }
+        '403': { $ref: '#/components/responses/CsrfNonValido' }
+  /api/v1/guilds:
+    get:
+      tags: [Autenticazione]
+      summary: Server gestibili e stato di presenza del bot
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: Elenco filtrato lato backend }
+  /api/v1/guilds/{guildId}/settings:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Configurazione]
+      summary: Legge le impostazioni del server
+      security: [{ Sessione: [] }]
+      responses:
+        '200':
+          description: Impostazioni validate e versione corrente
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurazioneServer' }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+        '503': { $ref: '#/components/responses/OAuthNonConfigurato' }
+    patch:
+      tags: [Configurazione]
+      summary: Valida e aggiorna le impostazioni
+      description: Richiede expectedVersion. Un conflitto di versione restituisce 409; gli errori di applicazione live sono riportati senza annullare il salvataggio.
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AggiornamentoImpostazioni' }
+            example:
+              expectedVersion: 1
+              settings:
+                general: { name: 'The Last Pact Guardian', language: it, color: '#5865F2', footer: 'The Last Pact Guardian' }
+                channels: { ticketPanel: '123456789012345678' }
+      responses:
+        '200':
+          description: Configurazione salvata, nuova versione ed esito di applicazione live
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigurazioneSalvata' }
+        '400': { $ref: '#/components/responses/DatiNonValidi' }
+        '409': { $ref: '#/components/responses/Conflitto' }
+  /api/v1/guilds/{guildId}/resources:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Configurazione]
+      summary: Elenca ruoli e canali reali del server
+      description: Richiede Gestisci server, presenza del bot e restituisce compatibilità e permessi effettivi dei canali.
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: Canali, ruoli, gerarchia del bot e permessi }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/settings/preview:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Configurazione]
+      summary: Valida e mostra un’anteprima senza salvare
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings: { $ref: '#/components/schemas/PatchImpostazioni' }
+            example: { settings: { security: { mode: 'alert', automatedActionsEnabled: false } } }
+      responses:
+        '200': { description: Impostazioni normalizzate, versione e sezioni modificate }
+        '400': { $ref: '#/components/responses/DatiNonValidi' }
+  /api/v1/guilds/{guildId}/settings/history:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Configurazione]
+      summary: Cronologia modifiche alle impostazioni
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Fino a 100 modifiche recenti } }
+  /api/v1/guilds/{guildId}/modules:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Configurazione]
+      summary: Stato moduli e impostazioni di sicurezza
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Stato dei moduli configurati } }
+  /api/v1/guilds/{guildId}/diagnostics:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Configurazione]
+      summary: Diagnostica del bot e dei canali configurati
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Disponibilità bot, server, canali e arresto automazioni } }
+  /api/v1/guilds/{guildId}/audit-log:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Configurazione]
+      summary: Registro delle modifiche e operazioni
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Fino a 100 record recenti del server richiesto } }
+  /api/v1/guilds/{guildId}/tickets:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Ticket]
+      summary: Coda ticket per lo staff autorizzato
+      security: [{ Sessione: [] }]
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [creating, open, closing, closed, failed] }
+        - in: query
+          name: categoryKey
+          schema: { type: string, maxLength: 32 }
+        - in: query
+          name: panelId
+          schema: { type: string, description: Identificativo del pannello per filtrare i ticket collegati }
+        - in: query
+          name: search
+          schema: { type: string, maxLength: 100 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+      responses:
+        '200': { description: Ticket del server }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/tickets/panel:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Ticket]
+      summary: Compatibilità con il pannello singolo configurato nelle versioni precedenti
+      description: Per creare e gestire pannelli multipli usa POST e GET /api/v1/guilds/{guildId}/tickets/panels.
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: ID del canale e del messaggio del pannello } }
+  /api/v1/guilds/{guildId}/tickets/panels:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Ticket]
+      summary: Elenca pannelli ticket e stato verificato delle risorse
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: Pannelli del server, risorse mancanti e conteggio ticket }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+    post:
+      tags: [Ticket]
+      summary: Crea un pannello ticket completo nel server selezionato
+      description: Registra prima un’operazione idempotente, poi crea o seleziona categorie e canale e pubblica il messaggio Discord. L’operatore deve avere Gestisci canali e il bot deve essere online con i permessi necessari.
+      security: [{ Sessione: [], Csrf: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreaPannelloTicket' }
+      responses:
+        '200': { description: Pannello attivo con link al canale Discord }
+        '202': { description: Operazione già in corso; interroga lo stato e ripeti con la stessa chiave }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+        '409': { $ref: '#/components/responses/Conflitto' }
+        '503': { description: Bot offline o Discord non disponibile }
+  /api/v1/guilds/{guildId}/tickets/panels/{panelId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: panelId
+        required: true
+        schema: { type: string, pattern: '^(?:[0-9a-f-]{36}|legacy-\d{17,20})$' }
+    get:
+      tags: [Ticket]
+      summary: Verifica canale, categorie, messaggio e ticket collegati
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Dettagli e diagnostica delle risorse } }
+    patch:
+      tags: [Ticket]
+      summary: Aggiorna contenuti, componenti, moduli, ruoli e limiti
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, patch]
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
+                patch: { type: object }
+      responses:
+        '200': { description: Configurazione salvata e messaggio aggiornato; include l’esito dei permessi ticket }
+        '409': { $ref: '#/components/responses/Conflitto' }
+    delete:
+      tags: [Ticket]
+      summary: Elimina il messaggio dopo conferma esatta dell’ID; conserva canali, categorie e ticket
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [confirmResourceIds], properties: { confirmResourceIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' } } } }
+      responses: { '200': { description: Messaggio eliminato e risorse conservate } }
+  /api/v1/guilds/{guildId}/tickets/panels/{panelId}/status:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: panelId
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Ticket]
+      summary: Disattiva o riattiva le nuove aperture senza rimuovere ticket esistenti
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [enabled], properties: { enabled: { type: boolean } } }
+      responses: { '200': { description: Stato del pannello aggiornato } }
+  /api/v1/guilds/{guildId}/tickets/panels/{panelId}/repair:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: panelId
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Ticket]
+      summary: Ricrea risorse mancanti e ripubblica o aggiorna il messaggio
+      security: [{ Sessione: [], Csrf: [] }]
+      responses:
+        '200': { description: Risorse riparate e risorse rimaste }
+        '409': { $ref: '#/components/responses/Conflitto' }
+  /api/v1/guilds/{guildId}/tickets/operations/{operationId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: operationId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Ticket]
+      summary: Legge stato, risorse registrate ed eventuale errore dell’operazione
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Stato persistente dell’operazione ticket } }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Ticket]
+      summary: Legge un ticket dopo controllo di accesso specifico
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: Metadati del ticket }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+        '404': { $ref: '#/components/responses/NonTrovato' }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}/messages:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Ticket]
+      summary: Legge la cronologia Discord del ticket
+      security: [{ Sessione: [] }]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - in: query
+          name: before
+          schema: { $ref: '#/components/schemas/Snowflake' }
+      responses:
+        '200': { description: Messaggi e nomi allegati, senza URL pubblici }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+    post:
+      tags: [Ticket]
+      summary: Invia una risposta dello staff come embed del bot
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        '200': { description: Risposta inviata nel canale ticket }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}/transcript:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Ticket]
+      summary: Legge la trascrizione privata in testo semplice
+      description: Autore, partecipanti e ruoli ticket staff possono accedere. La trascrizione non è esposta tramite link pubblico; i link degli allegati non vengono copiati.
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: Trascrizione e conteggio messaggi }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}/transcript/download:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Ticket]
+      summary: Scarica la trascrizione testuale con autorizzazione sul ticket
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: File text/plain con Content-Disposition attachment e Cache-Control no-store }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}/assign:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Ticket]
+      summary: Prende in carico il ticket per l’operatore corrente
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Ticket assegnato } }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}/participants:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Ticket]
+      summary: Aggiunge o rimuove un partecipante al ticket
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { userId: '234567890123456789', action: add }
+      responses: { '200': { description: Permessi e registro partecipanti aggiornati } }
+  /api/v1/guilds/{guildId}/tickets/{ticketId}/close:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: ticketId
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Ticket]
+      summary: Chiude e archivia un ticket con motivazione
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { reason: 'Richiesta risolta' }
+      responses:
+        '200': { description: Ticket chiuso e trascrizione archiviata }
+        '502': { description: Archiviazione fallita; ticket e canale restano disponibili }
+  /api/v1/guilds/{guildId}/reports:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Segnalazioni]
+      summary: Elenco segnalazioni per ruolo autorizzato
+      description: Usare confidential=true soltanto con il ruolo confidentialReportStaff.
+      security: [{ Sessione: [] }]
+      parameters:
+        - in: query
+          name: confidential
+          schema: { type: boolean, default: false }
+        - in: query
+          name: status
+          schema: { type: string, enum: [new, assigned, info_requested, accepted, rejected] }
+      responses:
+        '200': { description: Segnalazioni del solo server richiesto }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/reports/{reportId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: reportId
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Segnalazioni]
+      summary: Dettaglio e cronologia segnalazione
+      security: [{ Sessione: [] }]
+      responses:
+        '200': { description: Dettaglio riservato }
+        '403': { $ref: '#/components/responses/PermessoNegato' }
+  /api/v1/guilds/{guildId}/reports/{reportId}/status:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: reportId
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Segnalazioni]
+      summary: Assegna, richiede informazioni, accetta o respinge
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { status: rejected, reason: 'Le prove non consentono di confermare la violazione.' }
+      responses: { '200': { description: Stato aggiornato e messaggio privato tentato } }
+  /api/v1/guilds/{guildId}/moderation/cases:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Moderazione]
+      summary: Cerca i casi di moderazione
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Casi registrati del server } }
+  /api/v1/guilds/{guildId}/moderation/{targetId}/warnings:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: targetId
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Moderazione]
+      summary: Consulta avvertimenti e revoche
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Avvertimenti del destinatario nel solo server corrente } }
+  /api/v1/guilds/{guildId}/moderation/warnings:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Assegna un avvertimento
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { targetId: '234567890123456789', reason: 'Spam ripetuto' }
+      responses: { '200': { description: Caso creato e tentativo di notifica privata } }
+  /api/v1/guilds/{guildId}/moderation/warnings/{caseNumber}/revoke:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: caseNumber
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [Moderazione]
+      summary: Revoca un avvertimento conservando la cronologia
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { reason: 'Avvertimento assegnato per errore' }
+      responses: { '200': { description: Caso di revoca registrato } }
+  /api/v1/guilds/{guildId}/moderation/timeouts:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Applica un timeout
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { targetId: '234567890123456789', durationMinutes: 30, reason: 'Interruzione ripetuta' }
+      responses: { '200': { description: Caso registrato e tentativo di notifica privata } }
+  /api/v1/guilds/{guildId}/moderation/{targetId}/timeouts:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: targetId
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Moderazione]
+      summary: Rimuove un timeout
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { reason: 'Revisione completata' }
+      responses: { '200': { description: Caso registrato } }
+  /api/v1/guilds/{guildId}/moderation/kicks:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Espelle un utente
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { targetId: '234567890123456789', reason: 'Violazione ripetuta delle regole' }
+      responses: { '200': { description: Caso registrato } }
+  /api/v1/guilds/{guildId}/moderation/unbans:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Rimuove un ban Discord
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { targetId: '234567890123456789', reason: 'Ricorso accolto' }
+      responses: { '200': { description: Caso registrato } }
+  /api/v1/guilds/{guildId}/moderation/bans/confirmations:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Richiede conferma esplicita per un ban
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { targetId: '234567890123456789', reason: 'Violazione grave verificata' }
+      responses: { '200': { description: Token di conferma monouso valido cinque minuti } }
+  /api/v1/guilds/{guildId}/moderation/purges/confirmations:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Richiede conferma per eliminare da 2 a 100 messaggi
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { channelId: '345678901234567890', amount: 20 }
+      responses: { '200': { description: Token di conferma monouso valido cinque minuti } }
+  /api/v1/guilds/{guildId}/moderation/confirmations/{confirmationId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: confirmationId
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Moderazione]
+      summary: Esegue un ban o una pulizia confermati dall’operatore originale
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Caso registrato } }
+  /api/v1/guilds/{guildId}/moderation/slowmode:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Moderazione]
+      summary: Imposta lo slowmode di un canale
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { channelId: '345678901234567890', seconds: 10, reason: 'Riduzione temporanea dello spam' }
+      responses: { '200': { description: Caso registrato } }
+  /api/v1/guilds/{guildId}/announcements:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    get:
+      tags: [Annunci]
+      summary: Elenca annunci programmati
+      security: [{ Sessione: [] }]
+      responses: { '200': { description: Annunci, stato e versione concorrenziale } }
+    post:
+      tags: [Annunci]
+      summary: Pubblica o programma un annuncio
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnuncioInput' }
+            example:
+              type: evento
+              title: 'Serata community'
+              content: 'L’evento inizierà alle 20:00.'
+              roleIds: []
+              runAt: '2026-10-24T18:00:00.000Z'
+      responses: { '200': { description: Messaggio pubblicato o attività programmata } }
+  /api/v1/guilds/{guildId}/announcements/preview:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Annunci]
+      summary: Genera l’anteprima senza pubblicare
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnuncioInput' }
+            example: { type: manutenzione, title: 'Manutenzione', content: 'Server offline dalle 20:00.' }
+      responses: { '200': { description: Embed normalizzato e menzioni consentite } }
+  /api/v1/guilds/{guildId}/announcements/{taskId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: taskId
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [Annunci]
+      summary: Modifica attività non ancora eseguita
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, patch]
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
+                patch: { $ref: '#/components/schemas/PatchAnnuncio' }
+            example: { expectedVersion: 1, patch: { title: 'Nuovo orario', runAt: '2026-10-24T19:00:00.000Z' } }
+      responses:
+        '200': { description: Attività aggiornata }
+        '409': { $ref: '#/components/responses/Conflitto' }
+    delete:
+      tags: [Annunci]
+      summary: Annulla attività non ancora eseguita
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Attività annullata } }
+  /api/v1/guilds/{guildId}/security/lockdown:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Sicurezza]
+      summary: Richiede conferma per avviare il lockdown
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        content:
+          application/json:
+            example: { durationMinutes: 30 }
+      responses: { '200': { description: Token di conferma monouso valido cinque minuti } }
+  /api/v1/guilds/{guildId}/security/lockdown/confirmations/{confirmationId}:
+    parameters:
+      - { $ref: '#/components/parameters/GuildId' }
+      - in: path
+        name: confirmationId
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Sicurezza]
+      summary: Avvia lockdown dopo conferma esplicita
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Canali modificati, ignorati e non raggiungibili } }
+  /api/v1/guilds/{guildId}/security/restore:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Sicurezza]
+      summary: Ripristina soltanto gli overwrite ancora uguali a quelli applicati dal bot
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Esito per canale } }
+  /api/v1/guilds/{guildId}/security/channels/lock:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Sicurezza]
+      summary: Blocca un canale testuale registrando lo stato precedente
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { channelId: '345678901234567890', reason: 'Manutenzione temporanea' }
+      responses: { '200': { description: Blocco applicato e caso registrato } }
+  /api/v1/guilds/{guildId}/security/channels/unlock:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Sicurezza]
+      summary: Ripristina un blocco canale se i permessi non sono cambiati manualmente
+      security: [{ Sessione: [], Csrf: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example: { channelId: '345678901234567890', reason: 'Manutenzione terminata' }
+      responses: { '200': { description: Esito ripristino e caso registrato } }
+  /api/v1/guilds/{guildId}/security/automations/stop:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Sicurezza]
+      summary: Arresto d’emergenza delle automazioni
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Automazioni arrestate per questo server } }
+  /api/v1/guilds/{guildId}/security/automations/start:
+    parameters: [{ $ref: '#/components/parameters/GuildId' }]
+    post:
+      tags: [Sicurezza]
+      summary: Riabilita le automazioni secondo la configurazione corrente
+      security: [{ Sessione: [], Csrf: [] }]
+      responses: { '200': { description: Automazioni riabilitate } }
+components:
+  securitySchemes:
+    Sessione:
+      type: apiKey
+      in: cookie
+      name: tlpg_session
+      description: Cookie HttpOnly Secure in produzione. Il token non è accessibile a JavaScript.
+    Csrf:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: Token sincrono restituito da /api/v1/auth/me.
+  parameters:
+    GuildId:
+      in: path
+      name: guildId
+      required: true
+      schema: { type: string, pattern: '^\d{17,20}$' }
+  responses:
+    NonAutorizzato:
+      description: Sessione assente, scaduta o revocata
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+    PermessoNegato:
+      description: Permesso Discord o ruolo applicativo insufficiente
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+    CsrfNonValido:
+      description: Token CSRF mancante o errato
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+    DatiNonValidi:
+      description: Input non valido o risorsa di un altro server
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+    Conflitto:
+      description: Versione superata o operazione concorrente
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+    NonTrovato:
+      description: Risorsa non trovata nel server richiesto
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+    OAuthNonConfigurato:
+      description: OAuth2 non è configurato; le API amministrative restano disabilitate
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Errore' }
+  schemas:
+    SceltaRisorsaTicket:
+      oneOf:
+        - type: object
+          required: [mode, name]
+          properties:
+            mode: { type: string, const: create }
+            name: { type: string, minLength: 1, maxLength: 90 }
+        - type: object
+          required: [mode, id]
+          properties:
+            mode: { type: string, const: existing }
+            id: { $ref: '#/components/schemas/Snowflake' }
+    CampoModuloTicket:
+      type: object
+      required: [key, label, style, required]
+      properties:
+        key: { type: string, pattern: '^[a-z0-9_-]{1,32}$' }
+        label: { type: string, minLength: 1, maxLength: 45 }
+        style: { type: string, enum: [short, paragraph] }
+        required: { type: boolean }
+    TipologiaTicket:
+      type: object
+      required: [key, label, description, staffRoleIds, fields]
+      properties:
+        key: { type: string, pattern: '^[a-z0-9_-]{1,32}$' }
+        label: { type: string, minLength: 1, maxLength: 80 }
+        buttonLabel: { type: string, maxLength: 80 }
+        description: { type: string, minLength: 1, maxLength: 100 }
+        staffRoleIds: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/Snowflake' } }
+        fields: { type: array, minItems: 1, maxItems: 5, items: { $ref: '#/components/schemas/CampoModuloTicket' } }
+    CreaPannelloTicket:
+      type: object
+      required: [name, panelTitle, description, color, layout, panelCategory, panelChannel, ticketCategory, staffRoleIds, maxOpenPerUser, maxConcurrentTotal, cooldownSeconds, categories]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        panelTitle: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, minLength: 1, maxLength: 2000 }
+        color: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+        footer: { type: string, maxLength: 100 }
+        layout: { type: string, enum: [menu, buttons] }
+        panelCategory: { $ref: '#/components/schemas/SceltaRisorsaTicket' }
+        panelChannel: { $ref: '#/components/schemas/SceltaRisorsaTicket' }
+        ticketCategory: { $ref: '#/components/schemas/SceltaRisorsaTicket' }
+        staffRoleIds: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/Snowflake' } }
+        maxOpenPerUser: { type: integer, minimum: 1, maximum: 10 }
+        maxConcurrentTotal: { type: integer, minimum: 1, maximum: 500 }
+        cooldownSeconds: { type: integer, minimum: 0, maximum: 86400 }
+        categories: { type: array, minItems: 1, maxItems: 25, items: { $ref: '#/components/schemas/TipologiaTicket' } }
+    Errore:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+    Snowflake:
+      type: string
+      pattern: '^\d{17,20}$'
+    ConfigurazioneServer:
+      type: object
+      required: [guildId, settings, version, updatedAt, updatedBy]
+      properties:
+        guildId: { $ref: '#/components/schemas/Snowflake' }
+        version: { type: integer, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { type: string }
+        settings: { $ref: '#/components/schemas/Impostazioni' }
+    ConfigurazioneSalvata:
+      allOf:
+        - { $ref: '#/components/schemas/ConfigurazioneServer' }
+        - type: object
+          properties:
+            applicationStatus: { type: string, enum: [completata, parziale] }
+            liveApply:
+              type: array
+              items:
+                type: object
+                required: [feature, status]
+                properties:
+                  feature: { type: string }
+                  status: { type: string, enum: [ok, failed] }
+                  code: { type: string }
+    Impostazioni:
+      type: object
+      additionalProperties: false
+      required: [general, messages, permissions, channels, tickets, moderation, announcements, security, retention, modules]
+      properties:
+        general:
+          type: object
+          additionalProperties: false
+          required: [name, language, color, footer]
+          properties:
+            name: { type: string, minLength: 1, maxLength: 80 }
+            language: { type: string, enum: [it] }
+            color: { type: string, pattern: '^#[0-9a-fA-F]{6}$' }
+            footer: { type: string, minLength: 1, maxLength: 100 }
+        messages:
+          type: object
+          additionalProperties: false
+          required: [welcomeTitle, welcomeContent, ticketPanelTitle, ticketPanelDescription]
+          properties:
+            welcomeTitle: { type: string, minLength: 1, maxLength: 100 }
+            welcomeContent: { type: string, minLength: 1, maxLength: 1000 }
+            ticketPanelTitle: { type: string, minLength: 1, maxLength: 100 }
+            ticketPanelDescription: { type: string, minLength: 1, maxLength: 2000 }
+        permissions:
+          type: object
+          required: [roles]
+          properties:
+            roles:
+              type: object
+              required: [ticketStaff, reportStaff, confidentialReportStaff, moderate, configure]
+              properties:
+                ticketStaff: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+                reportStaff: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+                confidentialReportStaff: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+                moderate: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+                configure: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+        channels:
+          type: object
+          required: [logs, announcements, welcome, ticketParent, ticketPanel, reports, confidentialReports, securityAlerts]
+          properties:
+            logs: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            announcements: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            welcome: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            ticketParent: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            ticketPanel: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            reports: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            confidentialReports: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+            securityAlerts: { type: [string, 'null'], pattern: '^\d{17,20}$' }
+        tickets:
+          type: object
+          required: [enabled, maxOpenPerUser, cooldownSeconds, transcriptMessageLimit, categories]
+          properties:
+            enabled: { type: boolean }
+            maxOpenPerUser: { type: integer, minimum: 1, maximum: 3 }
+            cooldownSeconds: { type: integer, minimum: 0, maximum: 86400 }
+            transcriptMessageLimit: { type: integer, minimum: 50, maximum: 5000 }
+            categories:
+              type: array
+              maxItems: 25
+              items: { $ref: '#/components/schemas/CategoriaTicket' }
+        moderation:
+          type: object
+          required: [warningEscalationEnabled, warningEscalations]
+          properties:
+            warningEscalationEnabled: { type: boolean, default: false }
+            warningEscalations:
+              type: array
+              items:
+                type: object
+                required: [count, action, durationMinutes]
+                properties:
+                  count: { type: integer, minimum: 2, maximum: 100 }
+                  action: { type: string, enum: [timeout] }
+                  durationMinutes: { type: integer, minimum: 1, maximum: 40320 }
+        announcements:
+          type: object
+          required: [allowedRoleMentions]
+          properties:
+            allowedRoleMentions: { type: array, items: { $ref: '#/components/schemas/Snowflake' }, maxItems: 50 }
+        security:
+          type: object
+          required: [mode, automatedActionsEnabled, allowInvites, blockedDomains, allowedDomains, excludedChannelIds, excludedRoleIds, excludedUserIds, duplicateWindowSeconds, duplicateMessageLimit, mentionLimit, joinSpikeCount, joinSpikeWindowSeconds, newAccountDays, automod]
+          properties:
+            mode: { type: string, enum: [observe, alert, enforce] }
+            automatedActionsEnabled: { type: boolean, default: false }
+            allowInvites: { type: boolean, default: false }
+            blockedDomains: { type: array, items: { type: string, maxLength: 253 } }
+            allowedDomains: { type: array, items: { type: string, maxLength: 253 } }
+            excludedChannelIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+            excludedRoleIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+            excludedUserIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+            duplicateWindowSeconds: { type: integer, minimum: 2, maximum: 3600 }
+            duplicateMessageLimit: { type: integer, minimum: 2, maximum: 20 }
+            mentionLimit: { type: integer, minimum: 1, maximum: 100 }
+            joinSpikeCount: { type: integer, minimum: 2, maximum: 1000 }
+            joinSpikeWindowSeconds: { type: integer, minimum: 5, maximum: 3600 }
+            newAccountDays: { type: integer, minimum: 0, maximum: 30 }
+            automod:
+              type: object
+              required: [enabled, blockedWords]
+              properties:
+                enabled: { type: boolean, default: false }
+                blockedWords: { type: array, items: { type: string, minLength: 1, maxLength: 60 }, maxItems: 100 }
+        retention:
+          type: object
+          required: [days, automaticCleanupEnabled]
+          properties:
+            days: { type: integer, minimum: 1, maximum: 3650 }
+            automaticCleanupEnabled: { type: boolean, default: false }
+        modules:
+          type: object
+          required: [tickets, reports, moderation, security, announcements]
+          properties:
+            tickets: { type: boolean }
+            reports: { type: boolean }
+            moderation: { type: boolean }
+            security: { type: boolean }
+            announcements: { type: boolean }
+    CategoriaTicket:
+      type: object
+      required: [key, label, description, staffRoleIds, fields]
+      properties:
+        key: { type: string, pattern: '^[a-z0-9_-]{1,32}$' }
+        label: { type: string, minLength: 1, maxLength: 80 }
+        description: { type: string, minLength: 1, maxLength: 100 }
+        staffRoleIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' } }
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items:
+            type: object
+            required: [key, label, style, required]
+            properties:
+              key: { type: string, pattern: '^[a-z0-9_-]{1,32}$' }
+              label: { type: string, minLength: 1, maxLength: 45 }
+              style: { type: string, enum: [short, paragraph] }
+              required: { type: boolean }
+    PatchImpostazioni:
+      type: object
+      description: Patch parziale annidata; ogni proprietà inviata viene verificata contro lo schema di Impostazioni.
+      additionalProperties: true
+    AggiornamentoImpostazioni:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, settings]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        settings: { $ref: '#/components/schemas/PatchImpostazioni' }
+    AnnuncioInput:
+      type: object
+      additionalProperties: false
+      required: [type, title, content]
+      properties:
+        type: { type: string, enum: [annuncio, manutenzione, aggiornamento, evento] }
+        title: { type: string, minLength: 1, maxLength: 100 }
+        content: { type: string, minLength: 1, maxLength: 4000 }
+        roleIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' }, maxItems: 10 }
+        runAt: { type: string, format: date-time }
+        channelId: { $ref: '#/components/schemas/Snowflake' }
+    PatchAnnuncio:
+      type: object
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [annuncio, manutenzione, aggiornamento, evento] }
+        title: { type: string, minLength: 1, maxLength: 100 }
+        content: { type: string, minLength: 1, maxLength: 4000 }
+        roleIds: { type: array, items: { $ref: '#/components/schemas/Snowflake' }, maxItems: 10 }
+        runAt: { type: string, format: date-time }
+        channelId: { $ref: '#/components/schemas/Snowflake' }

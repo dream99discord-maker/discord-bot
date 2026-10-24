@@ -1,0 +1,81 @@
+{
+  "general": {
+    "name": "The Last Pact Guardian",
+    "language": "it",
+    "color": "#5865F2",
+    "footer": "The Last Pact Guardian"
+  },
+  "messages": {
+    "welcomeTitle": "Benvenuto",
+    "welcomeContent": "Benvenuto {user} in {server}.",
+    "ticketPanelTitle": "Apri un ticket",
+    "ticketPanelDescription": "Scegli l’argomento. Le informazioni inviate saranno visibili soltanto a te e allo staff autorizzato."
+  },
+  "permissions": {
+    "roles": {
+      "ticketStaff": [],
+      "reportStaff": [],
+      "confidentialReportStaff": [],
+      "moderate": [],
+      "configure": []
+    }
+  },
+  "channels": {
+    "logs": null,
+    "announcements": null,
+    "welcome": null,
+    "ticketParent": null,
+    "ticketPanel": null,
+    "reports": null,
+    "confidentialReports": null,
+    "securityAlerts": null
+  },
+  "tickets": {
+    "enabled": true,
+    "maxOpenPerUser": 1,
+    "cooldownSeconds": 300,
+    "transcriptMessageLimit": 2000,
+    "categories": [
+      { "key": "assistenza", "label": "Assistenza su The Last Pact", "description": "Aiuto sul gioco", "staffRoleIds": [], "fields": [{ "key": "descrizione", "label": "Come possiamo aiutarti?", "style": "paragraph", "required": true }] },
+      { "key": "giocatore", "label": "Segnalazione giocatore", "description": "Segnala un giocatore", "staffRoleIds": [], "fields": [{ "key": "giocatore", "label": "Utente Discord o ID Roblox", "style": "short", "required": true }, { "key": "descrizione", "label": "Descrizione e prove", "style": "paragraph", "required": true }] },
+      { "key": "bug", "label": "Segnalazione bug", "description": "Segnala un problema tecnico", "staffRoleIds": [], "fields": [{ "key": "descrizione", "label": "Descrizione del bug", "style": "paragraph", "required": true }] },
+      { "key": "ricorso", "label": "Ricorso contro una sanzione", "description": "Chiedi una revisione", "staffRoleIds": [], "fields": [{ "key": "sanzione", "label": "A quale sanzione fai ricorso?", "style": "short", "required": true }, { "key": "descrizione", "label": "Motivo del ricorso", "style": "paragraph", "required": true }] },
+      { "key": "riservato", "label": "Contatto riservato con lo staff", "description": "Contatto privato", "staffRoleIds": [], "fields": [{ "key": "descrizione", "label": "Messaggio riservato", "style": "paragraph", "required": true }] }
+    ]
+  },
+  "moderation": {
+    "warningEscalationEnabled": false,
+    "warningEscalations": []
+  },
+  "announcements": {
+    "allowedRoleMentions": []
+  },
+  "security": {
+    "mode": "observe",
+    "automatedActionsEnabled": false,
+    "allowInvites": false,
+    "blockedDomains": [],
+    "allowedDomains": [],
+    "excludedChannelIds": [],
+    "excludedRoleIds": [],
+    "excludedUserIds": [],
+    "duplicateWindowSeconds": 15,
+    "duplicateMessageLimit": 4,
+    "mentionLimit": 6,
+    "joinSpikeCount": 12,
+    "joinSpikeWindowSeconds": 60,
+    "newAccountDays": 3,
+    "automod": { "enabled": false, "blockedWords": [] }
+  },
+  "retention": {
+    "days": 180,
+    "automaticCleanupEnabled": false
+  },
+  "modules": {
+    "tickets": true,
+    "reports": true,
+    "moderation": true,
+    "security": true,
+    "announcements": true
+  }
+}
